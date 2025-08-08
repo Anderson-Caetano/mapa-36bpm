@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mapa Interativo - 36º BPM</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#0b3d2e"/>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.locatecontrol/dist/L.Control.Locate.min.css" />
+  <style>
+    :root { --bg:#0b3d2e; --fg:#fff; --muted:#cfe8df; }
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#f6f8fa; }
+    header { background: var(--bg); color: var(--fg); padding: .6rem .8rem; display:flex; gap:.6rem; align-items:center; }
+    header img { width: 30px; height: 30px; }
+    header h1 { font-size: 1rem; margin: 0; line-height: 1.2; }
+    .panel { padding:.6rem .8rem; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.07); }
+    .row { display:flex; gap:.5rem; }
+    input[type=text] { flex:1; padding:.6rem .7rem; border:1px solid #d0d7de; border-radius:8px; font-size: .95rem; }
+    button { border:0; background:#0b3d2e; color:#fff; padding:.6rem .8rem; border-radius:8px; font-weight:600; }
+    button.secondary { background:#134e3e; }
+    #map { height: calc(100dvh - 180px); }
+    .hint { color:#0b3d2e; background:#e6f4ef; border:1px dashed #8fd0b8; padding:.5rem .6rem; border-radius:8px; margin-top:.4rem; font-size:.9rem;}
+    .toast { position: fixed; left: .8rem; right:.8rem; bottom: .8rem; background:#1f2328; color:#fff; padding:.7rem .8rem; border-radius:10px; display:none; }
+    .badge { font-size:.8rem; background:#fff; color:#0b3d2e; padding:.15rem .35rem; border-radius:6px; font-weight:700; }
+    .small { font-size:.85rem; color:#57606a; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="assets/logo-36.png" alt="36º BPM">
+    <h1>Consulta Unidade PM • 36º BPM</h1>
+  </header>
+
+  <section class="panel">
+    <div class="row" style="margin-bottom:.5rem">
+      <input id="lat" type="text" inputmode="decimal" placeholder="Latitude (-19.6986)" />
+      <input id="lng" type="text" inputmode="decimal" placeholder="Longitude (-43.9118)" />
+    </div>
+    <div class="row" style="margin-bottom:.35rem">
+      <button id="btnCheck">Consultar</button>
+      <button id="btnLocate" class="secondary">📍 Usar minha localização</button>
+    </div>
+    <div class="small">Dica: toque no mapa para preencher as coordenadas. <span class="badge">Novo</span></div>
+    <div id="msg" class="hint" style="display:none"></div>
+  </section>
+
+  <div id="map"></div>
+  <div id="toast" class="toast"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.locatecontrol/dist/L.Control.Locate.min.js"></script>
+  <script>
+    // PWA
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+    }
+
+    const toast = (txt) => {
+      const t = document.getElementById('toast');
+      t.textContent = txt;
+      t.style.display = 'block';
+      setTimeout(() => t.style.display = 'none', 4200);
+    };
+
+    // Mapa
+    const map = L.map('map', { scrollWheelZoom: true }).setView([-19.6986, -43.9118], 12);
+    const tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    let layerSetores = null;
+
+    fetch('data/subsetores-36bpm.json')
+      .then(r => r.json())
+      .then(geo => {
+        layerSetores = L.geoJSON(geo, {
+          style: f => ({
+            color: f.properties.stroke || '#111',
+            weight: f.properties['stroke-width'] || 1.2,
+            fillColor: f.properties.fill || '#3388ff',
+            fillOpacity: f.properties['fill-opacity'] ?? 0.2
+          }),
+          onEachFeature: (f, layer) => {
+            const p = f.properties || {};
+            const nome = p.descrição || p.name || 'Subsetor';
+            layer.bindPopup(`<b>${nome}</b><br>COD: ${p.CODIGO || ''}<br>CIA: ${p.CIA || ''}`);
+          }
+        }).addTo(map);
+        map.fitBounds(layerSetores.getBounds(), { padding: [20, 20] });
+      })
+      .catch(() => {
+        toast('Não foi possível carregar os subsetores (abra online uma vez para cache).');
+      });
+
+    const latEl = document.getElementById('lat');
+    const lngEl = document.getElementById('lng');
+    const msgEl = document.getElementById('msg');
+
+    function consultar() {
+      const lat = parseFloat(latEl.value.replace(',', '.'));
+      const lng = parseFloat(lngEl.value.replace(',', '.'));
+      if (Number.isNaN(lat) || Number.isNaN(lng)) {
+        toast('Digite coordenadas válidas.');
+        return;
+      }
+      const p = [lat, lng];
+      L.marker(p).addTo(map).bindPopup('Ponto consultado').openPopup();
+      map.setView(p, 15);
+      if (!layerSetores) return;
+      let found = null;
+      layerSetores.eachLayer(l => {
+        if (L.polygon(l.getLatLngs()).getBounds().contains(p) && L.Polygon.prototype.isPrototypeOf(l)) {
+          if (leafletPip.pointInLayer(p, l, true).length) found = l;
+        }
+      });
+    }
+
+    // Clique no mapa para preencher coordenadas
+    map.on('click', (e) => {
+      latEl.value = e.latlng.lat.toFixed(6);
+      lngEl.value = e.latlng.lng.toFixed(6);
+    });
+
+    document.getElementById('btnCheck').addEventListener('click', consultar);
+
+    // Geolocalização
+    document.getElementById('btnLocate').addEventListener('click', () => {
+      if (!('geolocation' in navigator)) {
+        toast('Seu navegador não suporta geolocalização.');
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords;
+          latEl.value = latitude.toFixed(6);
+          lngEl.value = longitude.toFixed(6);
+          const p = [latitude, longitude];
+          L.marker(p).addTo(map).bindPopup('Você está aqui').openPopup();
+          map.setView(p, 16);
+        },
+        (err) => {
+          if (err.code === 1) {
+            toast('Permissão negada. Toque no 🔒 na barra do navegador e permita “Localização”.');
+          } else if (err.code === 2) {
+            toast('Posição indisponível. Ative o GPS ou tente novamente.');
+          } else {
+            toast('Não foi possível obter sua localização.');
+          }
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    });
+
+    // Pequena dependência inline para verificar ponto-em-polígono (sem CDN extra)
+    // fonte: ray-casting
+    function inside(point, vs) {
+      const x = point[1], y = point[0];
+      let inside = false;
+      for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+        const xi = vs[i][1], yi = vs[i][0];
+        const xj = vs[j][1], yj = vs[j][0];
+        const intersect = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi);
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    }
+  </script>
+</body>
+</html>
